@@ -1,0 +1,21 @@
+services:
+  vk-bridge:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./.secrets:/app/.secrets
+      - ./_media:/app/_media
+      # `claude` needs its own login/credentials and writes session history here -
+      # mount the host's config so `claude setup-token` (run once on the host) carries in,
+      # and so --resume can find sessions across container restarts.
+      - ~/.claude:/home/bridge/.claude
+      - ~/.claude.json:/home/bridge/.claude.json
+      # One line per path listed in sessions{} in vk_bridge.json - the container needs the
+      # same absolute path the config points at, so each project mounts at its own path:
+      - /home/alex/code/napopravku:/home/alex/code/napopravku
+      - /home/alex/Obsidian/work-kb:/home/alex/Obsidian/work-kb
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

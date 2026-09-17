@@ -1,0 +1,5 @@
+.secrets/vk_bridge.json
+.secrets/vk_bridge.state.json
+_media/
+__pycache__/
+*.pyc
