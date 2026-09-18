@@ -37,6 +37,7 @@ No third-party deps required (faster-whisper only if you want voice notes). Stdl
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 import re
@@ -181,6 +182,14 @@ class VK:
     def __init__(self, token: str, group_id: int):
         self.token = token
         self.group_id = group_id
+        # Belt-and-suspenders for poll(): urlopen's `timeout` covers connect/recv, but a
+        # blocked DNS lookup (getaddrinfo) can hang past it on some resolvers regardless -
+        # seen in practice as the bridge going silent for hours with no error logged and no
+        # progress on the long-poll ts cursor. Running the request in a worker and bounding
+        # it with future.result(timeout=...) guarantees the poll loop always comes back,
+        # even if that means abandoning a wedged thread (rare; a few workers of headroom).
+        self._poll_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4,
+                                                                 thread_name_prefix="vk-poll")
 
     def call(self, method: str, params: dict, timeout: int = 60) -> dict:
         params = {**params, "access_token": self.token, "v": VK_API_VERSION}
@@ -196,9 +205,19 @@ class VK:
     def poll(self, server: str, key: str, ts: str) -> dict:
         params = {"act": "a_check", "key": key, "ts": ts, "wait": VK_LONGPOLL_WAIT_SEC}
         url = f"{server}?{urllib.parse.urlencode(params)}"
-        try:
+
+        def _do_request():
             with urllib.request.urlopen(url, timeout=VK_LONGPOLL_WAIT_SEC + 15) as resp:
                 return json.loads(resp.read().decode("utf-8"))
+
+        try:
+            future = self._poll_pool.submit(_do_request)
+            return future.result(timeout=VK_LONGPOLL_WAIT_SEC + 20)
+        except concurrent.futures.TimeoutError:
+            log("[warn] longpoll hard-timeout (request hung past its own timeout, likely a "
+                "stuck DNS lookup) - abandoning it and retrying")
+            time.sleep(3)
+            return {}
         except Exception as e:
             log(f"[warn] longpoll failed: {e}")
             time.sleep(3)
